@@ -45,18 +45,8 @@ namespace phetracker
             var hash = GetHashString(caseDataString);
             data.metadata.hash = hash;
 
-            foreach (var la in data.ltlas)
-            {
-                la.kind = "ltlas";
-            }
-
-            foreach (var la in data.utlas)
-            {
-                la.kind = "utlas";
-            }
-
             // Combine and dedupe (for regions) case data
-            var allCaseData = data.ltlas.Concat(data.utlas.Where(y => !data.ltlas.Any(z => z.areaName == y.areaName)));
+            var allCaseData = data.ltlas;
 
             var pheBucketName = "pheCovidData";
             var orgId = "05d0f71967e52000";
