@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using InfluxDB.Client;
 using InfluxDB.Client.Api.Domain;
 using InfluxDB.Client.Writes;
+using System.IO;
 
 namespace phetracker
 {
@@ -33,110 +34,111 @@ namespace phetracker
             ILogger logger = loggerFactory.CreateLogger<Program>();
 
             logger.LogInformation("Init services....");
+            populationData = LoadPopulationData();
 
-            // Lazy debugging tools
-            var localTestMode = true;
-            if (System.Environment.GetEnvironmentVariable("environment") == "prod")
+            logger.LogInformation("Starting...");
+            HttpClient client = new HttpClient();
+
+            var caseDataString = await client.GetStringAsync("https://coronavirus.data.gov.uk/downloads/json/coronavirus-cases_latest.json");
+            CaseData data = JsonConvert.DeserializeObject<CaseData>(caseDataString);
+
+            var hash = GetHashString(caseDataString);
+            data.metadata.hash = hash;
+
+            foreach (var la in data.ltlas)
             {
-                logger.LogInformation("Prod env, message ending enabled");
-                localTestMode = false;
+                la.kind = "ltlas";
             }
 
-            // Service creation
-            // populationData = LoadPopulationData();
-
-                logger.LogInformation("Starting...");
-                HttpClient client = new HttpClient();
-
-                var caseDataString = await client.GetStringAsync("https://coronavirus.data.gov.uk/downloads/json/coronavirus-cases_latest.json");
-                CaseData data = JsonConvert.DeserializeObject<CaseData>(caseDataString);
-
-                var hash = GetHashString(caseDataString);
-                data.metadata.hash = hash;
-
-                foreach (var la in data.ltlas)
-                {
-                    la.kind = "ltlas";
-                }
-
-                foreach (var la in data.utlas)
-                {
-                    la.kind = "utlas";
-                }
-
-                var allCaseData = data.ltlas.Concat(data.utlas);
-
-
-                var Token = "hYf9V7UQge2McZNCTKerUkPwLvqncruS2hczL9jJX3ohSP-zJ7Yt1Za5J33qNcKkn_rI7pU3SiWHbV5waBt4dA==".ToCharArray();
-                using (var influxDBClient = InfluxDBClientFactory.Create("http://localhost:9999", Token))
-                using (var writeApi = influxDBClient.GetWriteApi())
-                {
-                    foreach (var record in allCaseData)
-                    {
-                        var point = PointData.Measurement("confirmedCases")
-                           .Tag("localAuth", record.areaName)
-                           .Tag("localAuthCode", record.areaCode)
-                           .Field("daily", record.dailyLabConfirmedCases ?? 0)
-                           .Field("total", record.dailyTotalLabConfirmedCasesRate)
-                           .Timestamp(record.specimenDate.ToUniversalTime(), WritePrecision.S);
-
-                        writeApi.WritePoint("pheCaseData", "covid", point);
-
-                    }
-                }
-
-
-                // if (previousMeta?.Resource?.hash == hash && localTestMode != true)
-                // {
-                //     logger.LogInformation("No update found... waiting 15mins");
-                //     await Task.Delay(TimeSpan.FromMinutes(15));
-                // }
-                // else
-                // {
-
-
-                //     var regionalCharts = new List<RegionalMeta>();
-
-                //     var averagePer100kLast4WeeksByRegion = new List<Tuple<string, double?>>();
-
-                // }
-
-                // if (localTestMode)
-                // {
-                //     logger.LogInformation("Done. Local testmode existing.");
-                //     return;
-                // }
-                // logger.LogInformation("Done. Looping again.");
-
-            // }
-        }
-
-        private static List<CaseRecord> ConvertToPer100kValue(List<CaseRecord> rawData)
-        {
-
-            var results = new List<CaseRecord>();
-            if (!populationData.ContainsKey(rawData.FirstOrDefault().areaCode))
+            foreach (var la in data.utlas)
             {
-                return results;
+                la.kind = "utlas";
             }
-            var population = populationData[rawData.FirstOrDefault().areaCode];
-            foreach (var record in rawData)
+
+            // Combine and dedupe (for regions) case data
+            var allCaseData = data.ltlas.Concat(data.utlas.Where(y => !data.ltlas.Any(z => z.areaName == y.areaName)));
+
+            var pheBucketName = "pheCovidData";
+            var orgId = "05d0f71967e52000";
+            var Token = "hYf9V7UQge2McZNCTKerUkPwLvqncruS2hczL9jJX3ohSP-zJ7Yt1Za5J33qNcKkn_rI7pU3SiWHbV5waBt4dA==".ToCharArray();
+            using (var influxDBClient = InfluxDBClientFactory.Create("http://localhost:9999", Token))
+            using (var writeApi = influxDBClient.GetWriteApi())
             {
+                BucketsApi bucketsApi = influxDBClient.GetBucketsApi();
                 try
                 {
-                    double population100ks = population / 100000d;
-                    var per100k = record.dailyLabConfirmedCases / population100ks;
-
-                    record.dailyLabConfirmedCases = (float)per100k;
-                    record.label = per100k.Value.ToString("0.00");
-                    results.Add(record);
+                    var pheBucketInstance = await bucketsApi.FindBucketByNameAsync(pheBucketName);
+                    await bucketsApi.DeleteBucketAsync(pheBucketInstance);
                 }
-                catch (Exception ex)
+                catch (Exception e)
                 {
-                    Console.WriteLine(ex.ToString());
+                    logger.LogError("Failed to delete bucket, may not exist" + e.ToString(), e);
+                }
+                var bucket = await bucketsApi.CreateBucketAsync(pheBucketName, orgId);
+
+                foreach (var record in allCaseData)
+                {
+                    var recordPer100k = ConvertToPer100kValue(record);
+                    var point = PointData.Measurement("confirmedCases")
+                       .Tag("localAuth", record.areaName)
+                       .Tag("localAuthKind", record.kind)
+                       .Tag("localAuthCode", record.areaCode)
+                       .Field("daily", record.dailyLabConfirmedCases ?? 0)
+                       .Field("daily100k", recordPer100k?.dailyLabConfirmedCases ?? 0)
+                       .Field("total", record.dailyTotalLabConfirmedCasesRate)
+                       .Field("total100k", recordPer100k?.dailyTotalLabConfirmedCasesRate ?? 0)
+                       .Timestamp(record.specimenDate.ToUniversalTime(), WritePrecision.S);
+
+                    writeApi.WritePoint(pheBucketName, orgId, point);
+
                 }
             }
-            return results;
+        }
+
+        private static Dictionary<string, int> LoadPopulationData()
+        {
+            var result = new Dictionary<string, int>();
+            using (var rd = new StreamReader("../referencedata/populationData.csv"))
+            {
+                while (!rd.EndOfStream)
+                {
+                    // Track Code to population value
+                    //E08000002,190990
+                    var splits = rd.ReadLine().Split(',');
+                    result[splits[0]] = int.Parse(splits[1]);
+                }
+            }
+            return result;
+        }
+
+        private static CaseRecord ConvertToPer100kValue(CaseRecord record)
+        {
+            if (record == null) {
+                return null;
+            }
+            if (!populationData.ContainsKey(record.areaCode))
+            {
+                return null;
+            }
+            var population = populationData[record.areaCode];
+            try
+            {
+                double population100ks = population / 100000d;
+                var newRecord = new CaseRecord {
+                    areaCode = record.areaCode,
+                    areaName = record.areaName,
+                    specimenDate = record.specimenDate,
+                    kind = record.kind,
+                    dailyLabConfirmedCases = record.dailyLabConfirmedCases / population100ks,
+                    dailyTotalLabConfirmedCasesRate = record.dailyTotalLabConfirmedCasesRate / population100ks,
+                };
+                return newRecord;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                return null;
+            }
         }
 
         public static byte[] GetHash(string inputString)
@@ -207,13 +209,10 @@ namespace phetracker
     {
         // Added details
         public string kind;
-        public string label;
-
-
         public string areaCode { get; set; }
         public string areaName { get; set; }
         public DateTime specimenDate { get; set; }
-        public float? dailyLabConfirmedCases { get; set; }
+        public double? dailyLabConfirmedCases { get; set; }
         // public int? previouslyReportedDailyCases { get; set; }
         // public int? changeInDailyCases { get; set; }
         // public int? totalLabConfirmedCases { get; set; }
