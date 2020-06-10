@@ -2,7 +2,7 @@
 # Start 
 
 1. Open devcontainer in VSCode - [Here is a quick start guide](https://code.visualstudio.com/docs/remote/containers#_quick-start-try-a-dev-container)
-2. Start influx and Chronograf. Inside the Vscode devcontainer. Open an terminal and run: `./influx/start.sh`
+2. Start influx and Chronograf. Inside the Vscode devcontainer. Open an terminal and run: `./serviceConfig/start.sh`
 3. Do the same for the data loader to populate the influxdb with the PHE dataset. Run dataloader `cd ./dataloader && dotnet run`
 4. Go to the data explorer: "http://localhost:9999/orgs/05d0f71967e52000/data-explorer" username: admin pw: admin
 5. Try out some queries like:
