@@ -67,17 +67,17 @@ RUN apt-get update \
         && curl -sL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - 2>/dev/null \
         && apt-get update \
         && apt-get install -y azure-cli; \
-    fi \
-    #
-    # Clean up
-    && apt-get autoremove -y \
-    && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/*
+    fi
 
 # Switch back to dialog for any ad-hoc use of apt-get
 ENV DEBIAN_FRONTEND=dialog
 
 # Install Influx and components
 RUN wget https://dl.influxdata.com/influxdb/releases/influxdb_2.0.0-beta.10_linux_amd64.tar.gz && tar xvfz influxdb_2.0.0-beta.10_linux_amd64.tar.gz && ls ./influxdb_2.0.0-beta.10_linux_amd64/ && cp ./influxdb_2.0.0-beta.10_linux_amd64/* /usr/local/bin/
-
 RUN wget https://dl.influxdata.com/chronograf/releases/chronograf_1.8.4_amd64.deb && dpkg -i chronograf_1.8.4_amd64.deb
+
+# # Install Grafana components 
+# RUN apt-get install -y adduser libfontconfig1
+# RUN wget https://dl.grafana.com/oss/release/grafana_7.0.3_amd64.deb
+# RUN dpkg -i grafana_7.0.3_amd64.deb
+# RUN grafana-cli plugins install grafana-influxdb-flux-datasource
