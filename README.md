@@ -18,13 +18,15 @@ or
 
 ```
 from(bucket: "pheCovidData")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> range(start: -120d)
   |> filter(fn: (r) => r._field == "daily100k")
   |> group(columns: ["_field"])
   |> aggregateWindow(every: 1d, fn: mean)
   |> movingAverage(n: 7)
   |> yield(name: "Local Authory 7 day moving average per 100k people")
 ```
+
+Learn how to write Flux queries here: [Getting Started with Flux](https://docs.influxdata.com/flux/v0.65/introduction/getting-started/query-influxdb/).
 
 The fields are as follows:
 
