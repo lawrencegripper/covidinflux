@@ -23,7 +23,15 @@ from(bucket: "pheCovidData")
   |> group(columns: ["_field"])
   |> aggregateWindow(every: 1d, fn: mean)
   |> movingAverage(n: 7)
-  |> yield(name: "Local Authory 7 day moving average per 100k people")
+  |> yield(name: "Average Local Authory 7 day moving average per 100k people")
+```
+
+or
+
+```
+from(bucket: "pheCovidData")
+  |> range(start: -120d)
+  |> filter(fn: (r) => r._field == "daily" and r.localAuth == "Leeds")
 ```
 
 Learn how to write Flux queries here: [Getting Started with Flux](https://docs.influxdata.com/flux/v0.65/introduction/getting-started/query-influxdb/).
@@ -34,8 +42,8 @@ The fields are as follows:
 - `daily` is number of lab confirmed cases that day. 
 - `total100k` is number of lab confirmed cases total per 100k people. 
 - `total100k` is number of lab confirmed cases total. 
-- `areaName` is the local authority name
-- `areaCode` is the local authority code
+- `localAuth` is the local authority name
+- `localAuthCode` is the local authority code
 
 # Quoting or using these figures
 
