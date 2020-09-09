@@ -349,3 +349,4 @@ healthchecksdb
 MigrationBackup/
 
 # End of https://www.toptal.com/developers/gitignore/api/csharp
+dataloader/datacache.json

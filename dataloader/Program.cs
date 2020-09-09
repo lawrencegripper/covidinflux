@@ -35,15 +35,36 @@ namespace phetracker
 
             logger.LogInformation("Init services....");
             populationData = LoadPopulationData();
-
             logger.LogInformation("Starting...");
-            HttpClient client = new HttpClient();
+            string dataFilePath = "datacache.json";
 
-            var caseDataString = await client.GetStringAsync("https://coronavirus.data.gov.uk/downloads/json/coronavirus-cases_latest.json");
-            CaseData data = JsonConvert.DeserializeObject<CaseData>(caseDataString);
+            CaseData data = new CaseData();
+            if (System.IO.File.Exists(dataFilePath))
+            {
+                logger.LogInformation("Using Cached data delete data.json to load fresh data");
+                data = JsonConvert.DeserializeObject<CaseData>(System.IO.File.ReadAllText(dataFilePath));
+            }
+            else
+            {
+                logger.LogInformation("Downloading data from API");
+                APIClient client = new APIClient(logger);
+                var caseDataV1 = await client.GetLTLAData(logger);
 
-            var hash = GetHashString(caseDataString);
-            data.metadata.hash = hash;
+                data.ltlas = new List<CaseRecord>();
+                data.metadata = new Metadata();
+                foreach (var item in caseDataV1)
+                {
+                    data.ltlas.Add(new CaseRecord()
+                    {
+                        areaCode = item.areaCode,
+                        areaName = item.areaName,
+                        dailyLabConfirmedCases = item.newCasesBySpecimenDate,
+                        specimenDate = item.date,
+                    });
+                }
+                var caseDataString = JsonConvert.SerializeObject(data);
+                System.IO.File.WriteAllText(dataFilePath, caseDataString);
+            }
 
             // Combine and dedupe (for regions) case data
             var allCaseData = data.ltlas;
@@ -65,6 +86,7 @@ namespace phetracker
                     logger.LogError("Failed to delete bucket, may not exist" + e.ToString(), e);
                 }
                 var bucket = await bucketsApi.CreateBucketAsync(pheBucketName, orgId);
+                var points = new List<PointData>(allCaseData.Count);
 
                 foreach (var record in allCaseData)
                 {
@@ -78,10 +100,10 @@ namespace phetracker
                        .Field("total", record.dailyTotalLabConfirmedCasesRate)
                        .Field("total100k", recordPer100k?.dailyTotalLabConfirmedCasesRate ?? 0)
                        .Timestamp(record.specimenDate.ToUniversalTime(), WritePrecision.S);
-
-                    writeApi.WritePoint(pheBucketName, orgId, point);
+                    points.Add(point);
 
                 }
+                writeApi.WritePoints(pheBucketName, orgId, points);
             }
         }
 
@@ -103,7 +125,8 @@ namespace phetracker
 
         private static CaseRecord ConvertToPer100kValue(CaseRecord record)
         {
-            if (record == null) {
+            if (record == null)
+            {
                 return null;
             }
             if (!populationData.ContainsKey(record.areaCode))
@@ -114,7 +137,8 @@ namespace phetracker
             try
             {
                 double population100ks = population / 100000d;
-                var newRecord = new CaseRecord {
+                var newRecord = new CaseRecord
+                {
                     areaCode = record.areaCode,
                     areaName = record.areaName,
                     specimenDate = record.specimenDate,
