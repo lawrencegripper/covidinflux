@@ -144,6 +144,8 @@ namespace phetracker
                         .Tag("localAuth", record.ltlaName)
                         .Tag("trust", record.areaName)
                         .Field("newAdmissions", record.newAdmissions ?? 0)
+                        .Field("cases", record.hospitalCases ?? 0)
+                        .Field("mvBeds", record.covidOccupiedMVBeds ?? 0)
                         .Timestamp(record.date.ToUniversalTime(), WritePrecision.S);
                     points.Add(point);
 
