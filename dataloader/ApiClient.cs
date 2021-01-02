@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -25,13 +26,27 @@ namespace phetracker
         {
             var handler = new HttpRetryMessageHandler(new HttpClientHandler()
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip
             }, logger);
 
             this.logger = logger;
             client = new HttpClient(handler);
-            client.Timeout = TimeSpan.FromMinutes(5);
+            client.Timeout = TimeSpan.FromMinutes(10);
             client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+        }
+
+        public async Task<List<NhsTrustDataPoint>> GetNHSTrustData()
+        {
+            using var response = await (new HttpClient()).GetAsync("https://api.coronavirus.data.gov.uk/v2/data?areaType=nhsTrust&metric=hospitalCases&metric=newAdmissions&metric=covidOccupiedMVBeds&format=json");
+            var contentStream = await response.Content.ReadAsStreamAsync();
+
+            using var streamReader = new StreamReader(contentStream);
+            using var jsonReader = new JsonTextReader(streamReader);
+
+            JsonSerializer serializer = new JsonSerializer();
+
+            var data = serializer.Deserialize<NhsTrustData>(jsonReader);
+            return data.body;
         }
 
         public async Task<List<CaseDataV1>> GetLTLAData(ILogger logger)
@@ -120,7 +135,8 @@ namespace phetracker
     {
         private ILogger logger;
 
-        public HttpRetryMessageHandler(HttpClientHandler handler, ILogger logger) : base(handler) { 
+        public HttpRetryMessageHandler(HttpClientHandler handler, ILogger logger) : base(handler)
+        {
             this.logger = logger;
         }
 
@@ -130,11 +146,31 @@ namespace phetracker
             Policy
                 .Handle<HttpRequestException>()
                 .Or<TaskCanceledException>()
-                .OrResult<HttpResponseMessage>(x => !x.IsSuccessStatusCode)
-                .WaitAndRetryAsync(8, retryAttempt => {
+                .OrResult<HttpResponseMessage>(x => !x.IsSuccessStatusCode && x.StatusCode != HttpStatusCode.TooManyRequests)
+                .WaitAndRetryAsync(8, retryAttempt =>
+                {
                     logger.LogError("Request failed retrying");
-                    return TimeSpan.FromSeconds(Math.Pow(2, retryAttempt));
+                    return TimeSpan.FromSeconds(Math.Pow(3, retryAttempt));
                 })
                 .ExecuteAsync(() => base.SendAsync(request, cancellationToken));
     }
+
+    public class NhsTrustDataPoint
+    {
+        public DateTime date { get; set; }
+        public string areaType { get; set; }
+        public string areaCode { get; set; }
+        public string areaName { get; set; }
+        public int? hospitalCases { get; set; }
+        public int? newAdmissions { get; set; }
+        public int? covidOccupiedMVBeds { get; set; }
+        public string ltlaName { get; set; }
+    }
+
+    public class NhsTrustData
+    {
+        public int length { get; set; }
+        public List<NhsTrustDataPoint> body { get; set; }
+    }
+
 }

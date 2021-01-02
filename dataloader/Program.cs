@@ -35,10 +35,16 @@ namespace phetracker
 
             logger.LogInformation("Init services....");
             populationData = LoadPopulationData();
+            Maps maps = new Maps();
+            var trustsData = maps.GetTrustsForLtlas();
             logger.LogInformation("Starting...");
             string dataFilePath = "datacache.json";
 
+            logger.LogInformation("Downloading data from API");
+            APIClient client = new APIClient(logger);
             CaseData data = new CaseData();
+            var trustData = await client.GetNHSTrustData();
+            var processedTrustData = new List<NhsTrustDataPoint>();
             if (System.IO.File.Exists(dataFilePath))
             {
                 logger.LogInformation("Using Cached data delete data.json to load fresh data");
@@ -46,8 +52,6 @@ namespace phetracker
             }
             else
             {
-                logger.LogInformation("Downloading data from API");
-                APIClient client = new APIClient(logger);
                 var caseDataV1 = await client.GetLTLAData(logger);
 
                 data.ltlas = new List<CaseRecord>();
@@ -56,14 +60,44 @@ namespace phetracker
                 {
                     data.ltlas.Add(new CaseRecord()
                     {
+                        kind = "localAuthorityCases",
                         areaCode = item.areaCode,
                         areaName = item.areaName,
                         dailyLabConfirmedCases = item.newCasesBySpecimenDate,
                         specimenDate = item.date,
                     });
                 }
+
                 var caseDataString = JsonConvert.SerializeObject(data);
                 System.IO.File.WriteAllText(dataFilePath, caseDataString);
+            }
+
+            // always process the hospital data
+            // Build trust data structure
+            var trustDataDictionary = trustData.GroupBy(y => y.areaName).ToDictionary(y => y.Key, z =>
+            {
+                return z.ToDictionary(v => v.date);
+            });
+            foreach (var ltla in data.ltlas.GroupBy(y => y.areaName))
+            {
+                try
+                {
+                    var hospitals = trustsData[ltla.Key];
+                    foreach (var hospital in hospitals)
+                    {
+                        var hospitalData = trustDataDictionary[hospital.OrganisationName];
+                        foreach (var dataPoint in hospitalData)
+                        {
+                            Console.WriteLine("Adding datapoint for ltal" + ltla.Key);
+                            dataPoint.Value.ltlaName = ltla.Key;
+                            processedTrustData.Add(dataPoint.Value);
+                        }
+                    }
+                }
+                catch (System.Exception)
+                {
+                    Console.WriteLine("Failed to find hospitals for ltla:" + ltla.Key);
+                }
             }
 
             // Combine and dedupe (for regions) case data
@@ -103,7 +137,20 @@ namespace phetracker
                     points.Add(point);
 
                 }
+
+                foreach (var record in processedTrustData)
+                {
+                    var point = PointData.Measurement("trustData")
+                        .Tag("localAuth", record.ltlaName)
+                        .Tag("trust", record.areaName)
+                        .Field("newAdmissions", record.newAdmissions ?? 0)
+                        .Timestamp(record.date.ToUniversalTime(), WritePrecision.S);
+                    points.Add(point);
+
+                }
                 writeApi.WritePoints(pheBucketName, orgId, points);
+
+
             }
         }
 
